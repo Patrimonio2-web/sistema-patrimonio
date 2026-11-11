@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="p-8 bg-gray-900 text-white min-h-screen">
+    <h1 class="text-3xl font-bold mb-8 text-center tracking-wide">
+        📋 Listado de Mobiliario
+    </h1>
+
+    <form method="get" action="{{ url_for('imprimir_listado') }}" class="space-y-8 bg-gray-800 p-8 rounded-xl shadow-lg max-w-5xl mx-auto">
+
+        <!-- 🔹 SECCIÓN: UBICACIÓN -->
+        <div>
+            <h2 class="text-2xl font-semibold mb-4 text-teal-400">Ubicación</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- ANEXO -->
+                <div>
+                    <label for="anexo" class="block mb-2 font-semibold">Anexo</label>
+                    <select name="anexo" id="anexo" class="w-full p-2 bg-gray-700 rounded focus:ring-2 focus:ring-teal-500">
+                        <option value="todos">📍 Todos los anexos</option>
+                        {% for anexo in anexos %}
+                            <option value="{{ anexo.id }}">{{ anexo.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- SUBDEPENDENCIA -->
+                <div>
+                    <label for="subdependencia" class="block mb-2 font-semibold">Subdependencia</label>
+                    <select name="subdependencia" id="subdependencia" class="w-full p-2 bg-gray-700 rounded focus:ring-2 focus:ring-teal-500">
+                        <option value="todas">🏢 Todas las subdependencias</option>
+                        {% if subdependencias %}
+                            {% for sub in subdependencias %}
+                                <option value="{{ sub.id }}">{{ sub.nombre }}</option>
+                            {% endfor %}
+                        {% endif %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔹 SECCIÓN: RUBRO Y CLASE -->
+        <div>
+            <h2 class="text-2xl font-semibold mb-4 text-teal-400">Categorías</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- RUBRO -->
+                <div>
+                    <label for="rubro" class="block mb-2 font-semibold">Rubro</label>
+                    <select name="rubro" id="rubro" class="w-full p-2 bg-gray-700 rounded focus:ring-2 focus:ring-teal-500">
+                        <option value="">📂 Todos los rubros</option>
+                        {% for rubro in rubros %}
+                            <option value="{{ rubro.id_rubro }}">{{ rubro.nombre }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- CLASE -->
+                <div>
+                    <label for="clase" class="block mb-2 font-semibold">Clase</label>
+                    <select name="clase" id="clase" class="w-full p-2 bg-gray-700 rounded focus:ring-2 focus:ring-teal-500">
+                        <option value="">📁 Todas las clases</option>
+                        {% if clases %}
+                            {% for clase in clases %}
+                                <option value="{{ clase.id_clase }}">{{ clase.descripcion }}</option>
+                            {% endfor %}
+                        {% endif %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 🔹 SECCIÓN: FILTROS -->
+        <div>
+            <h2 class="text-2xl font-semibold mb-4 text-teal-400">Filtros</h2>
+
+            <!-- ESTADOS -->
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {% for key, label in {
+                    "no_dado": "No Dado",
+                    "para_reparacion": "Reparación",
+                    "para_baja": "Para Baja",
+                    "faltante": "Faltante",
+                    "sobrante": "Sobrante",
+                    "problema_etiqueta": "Problema Etiqueta"
+                }.items() %}
+                <label class="flex items-center space-x-2 bg-gray-700 p-2 rounded hover:bg-gray-600 transition">
+                    <input type="checkbox" name="filtros" value="{{ key }}" class="accent-teal-500">
+                    <span>{{ label }}</span>
+                </label>
+                {% endfor %}
+            </div>
+
+            <!-- ESTADO DE CONSERVACIÓN -->
+            <div class="mt-6">
+                <label class="block mb-2 font-semibold">Estado de conservación</label>
+                <select name="estado_conservacion" class="p-2 bg-gray-700 rounded focus:ring-2 focus:ring-teal-500">
+                    <option value="">Todos</option>
+                    <option value="Bueno">Bueno</option>
+                    <option value="Regular">Regular</option>
+                    <option value="Malo">Malo</option>
+                </select>
+            </div>
+
+            <!-- INCLUIR FALTANTES -->
+            <div class="mt-4">
+                <label class="flex items-center space-x-2">
+                    <input type="checkbox" name="incluir_faltantes" value="true" class="accent-teal-500">
+                    <span>Incluir faltantes</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- 🔹 SECCIÓN: TIPO DE LISTADO -->
+        <div>
+            <h2 class="text-2xl font-semibold mb-4 text-teal-400">Tipo de listado</h2>
+            <div class="flex space-x-6">
+                <label class="flex items-center space-x-2 bg-gray-700 p-2 rounded hover:bg-gray-600 transition">
+                    <input type="radio" name="tipo_listado" value="clasico" checked class="accent-teal-500">
+                    <span>Clásico</span>
+                </label>
+                <label class="flex items-center space-x-2 bg-gray-700 p-2 rounded hover:bg-gray-600 transition">
+                    <input type="radio" name="tipo_listado" value="entrega" class="accent-teal-500">
+                    <span>Listado de entrega</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- 🔹 BOTÓN -->
+        <div class="text-center pt-6">
+            <button type="submit"
+                class="bg-teal-600 hover:bg-teal-700 px-8 py-3 rounded-lg text-white font-bold tracking-wide shadow-lg transition transform hover:scale-105">
+                Generar listado
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+    // 🧠 Carga dinámica de subdependencias según anexo seleccionado
+    document.getElementById('anexo').addEventListener('change', function () {
+        const anexoId = this.value;
+        const subSelect = document.getElementById('subdependencia');
+
+        subSelect.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = 'todas';
+        defaultOpt.textContent = '🏢 Todas las subdependencias';
+        subSelect.appendChild(defaultOpt);
+
+        if (anexoId === 'todos') return;
+
+        fetch(`/api/subdependencias_por_anexo/${anexoId}`)
+            .then(res => res.json())
+            .then(data => {
+                data.forEach(sub => {
+                    const opt = document.createElement('option');
+                    opt.value = sub.id;
+                    opt.textContent = sub.nombre;
+                    subSelect.appendChild(opt);
+                });
+            })
+            .catch(err => console.error('⚠️ Error al cargar subdependencias:', err));
+    });
+
+    // 🧩 Carga dinámica de clases según rubro
+    document.getElementById('rubro').addEventListener('change', function () {
+        const rubroId = this.value;
+        const claseSelect = document.getElementById('clase');
+
+        claseSelect.innerHTML = '';
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = '';
+        defaultOpt.textContent = '📁 Todas las clases';
+        claseSelect.appendChild(defaultOpt);
+
+        if (!rubroId) return;
+
+        fetch(`/api/clases-por-rubro?rubro_id=${rubroId}`)
+            .then(res => res.json())
+            .then(data => {
+                data.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.id_clase;
+                    opt.textContent = c.descripcion;
+                    claseSelect.appendChild(opt);
+                });
+            })
+            .catch(err => console.error('⚠️ Error al cargar clases:', err));
+    });
+</script>
+{% endblock %}
+
