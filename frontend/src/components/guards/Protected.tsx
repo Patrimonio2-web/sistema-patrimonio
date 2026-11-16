@@ -5,12 +5,11 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { RefreshCw, ShieldAlert } from "lucide-react";
 import { me, type AuthSession } from "@/services/authService";
-import { clearAuthUser, getAuthUser, setAuthUser } from "@/services/authRole";
+import { clearAuthUser, setAuthUser } from "@/services/authRole";
 import { useAutoLogout } from "@/hooks/useAutoLogout";
 
 const LOGIN_PATH = "/Login";
 const PASSWORD_CHANGE_PATH = "/CambiarPassword";
-const RECENT_SESSION_MS = 30_000;
 
 function isPublicRoute(pathname: string) {
   const current = pathname.toLowerCase();
@@ -114,6 +113,16 @@ export default function Protected({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
+    const revalidateRestoredPage = (event: PageTransitionEvent) => {
+      if (event.persisted && !isPublicRoute(window.location.pathname)) {
+        window.location.reload();
+      }
+    };
+    window.addEventListener("pageshow", revalidateRestoredPage);
+    return () => window.removeEventListener("pageshow", revalidateRestoredPage);
+  }, []);
+
+  useEffect(() => {
     let mounted = true;
 
     const checkAuth = async () => {
@@ -127,23 +136,6 @@ export default function Protected({ children }: { children: React.ReactNode }) {
       setAuthError("");
 
       let user = sessionUser;
-      if (!user) {
-        const cached = getAuthUser();
-        const recentlyVerified = Boolean(
-          cached.verifiedAt && Date.now() - cached.verifiedAt < RECENT_SESSION_MS
-        );
-        const pendingPasswordChange =
-          currentPath === PASSWORD_CHANGE_PATH.toLowerCase() &&
-          cached.passwordChangeRequired === true;
-
-        if (cached.username && (recentlyVerified || pendingPasswordChange)) {
-          user = {
-            username: cached.username,
-            role: cached.role,
-            password_change_required: cached.passwordChangeRequired === true,
-          };
-        }
-      }
 
       try {
         if (!user) user = await me();

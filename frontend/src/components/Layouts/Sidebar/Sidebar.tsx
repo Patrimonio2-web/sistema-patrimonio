@@ -26,8 +26,10 @@ import {
   HiX,
 } from "react-icons/hi";
 import { LogoutAlert } from "@/components";
+import { logout } from "@/services/authService";
 import {
   canAccessPurchaseReports,
+  clearAuthUser,
   isComisario,
   canManagePublicConsultations,
   isMatafuegosManager,
@@ -194,6 +196,7 @@ function SidebarContent({
 }) {
   const pathname = usePathname();
   const [showAlert, setShowAlert] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const viewer = isViewer();
   const superadmin = isSuperAdmin();
   const matafuegosManager = isMatafuegosManager();
@@ -201,9 +204,18 @@ function SidebarContent({
   const canManageConsultations = canManagePublicConsultations();
   const canAccessPurchases = canAccessPurchaseReports();
 
-  const confirmLogout = () => {
-    setShowAlert(false);
-    window.location.href = "/";
+  const confirmLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await logout();
+      clearAuthUser();
+      sessionStorage.removeItem("showWelcome");
+      window.location.replace("/Login");
+    } catch {
+      setLoggingOut(false);
+      toast.error("No se pudo cerrar la sesión. Intentá nuevamente.");
+    }
   };
 
   const handleProtectedClick = (

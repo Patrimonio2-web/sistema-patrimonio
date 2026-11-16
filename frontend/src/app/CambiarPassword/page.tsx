@@ -37,9 +37,10 @@ export default function CambiarPasswordPage() {
   const handleLogout = async () => {
     try {
       await logout();
-    } finally {
       clearAuthUser();
       window.location.replace("/Login");
+    } catch {
+      setError("No se pudo cerrar la sesión. Intentá nuevamente.");
     }
   };
 
