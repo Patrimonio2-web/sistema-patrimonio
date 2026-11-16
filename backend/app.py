@@ -31,7 +31,7 @@ from openpyxl import Workbook
 # ===================== APP & CONFIG =====================
 load_dotenv()
 
-IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL"))
+IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT_ID") or os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL"))
 
 
 def _split_env_list(name, fallback=None):
