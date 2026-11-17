@@ -154,13 +154,14 @@ export default function ImprimirComprasBienesPage() {
 
         <table className="mt-3 w-full table-fixed border-collapse text-[9pt] leading-tight">
           <colgroup>
-            <col style={{ width: "16%" }} />
-            <col style={{ width: "10%" }} />
-            <col style={{ width: "21%" }} />
-            <col style={{ width: "15%" }} />
-            <col style={{ width: "10%" }} />
-            <col style={{ width: "10%" }} />
+            <col style={{ width: "14%" }} />
+            <col style={{ width: "8%" }} />
             <col style={{ width: "18%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "16%" }} />
           </colgroup>
           <thead>
             <tr className="bg-slate-100 text-black">
@@ -174,6 +175,7 @@ export default function ImprimirComprasBienesPage() {
                 Descripción según factura
               </th>
               <th className="border-2 border-black p-1 text-[8pt]">Proveedor</th>
+              <th className="border-2 border-black p-1 text-[8pt]">Valor compra (ARS)</th>
               <th className="border-2 border-black p-1 text-[8pt]">
                 Fecha de factura
               </th>
@@ -199,6 +201,9 @@ export default function ImprimirComprasBienesPage() {
                 </td>
                 <td className="break-words border-2 border-black p-1 text-center font-semibold">
                   {item.proveedor || "-"}
+                </td>
+                <td className="break-words border-2 border-black p-1 text-right">
+                  {item.valor_compra == null || item.valor_compra === "" ? "-" : new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(Number(item.valor_compra))}
                 </td>
                 <td className="border-2 border-black p-1 text-center">
                   {dateLabel(item.fecha_compra)}

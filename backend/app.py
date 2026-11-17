@@ -962,14 +962,29 @@ def subir_imagen():
 
     file = request.files['foto']
     if file and allowed_file(file.filename):
+        temp_path = None
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp:
-                file.save(temp.name)
-                url = upload_to_cloudinary(temp.name)
-                os.remove(temp.name)
-                return jsonify({"url": url})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+                temp_path = temp.name
+                file.save(temp_path)
+            try:
+                with Image.open(temp_path) as image:
+                    if image.format not in {"JPEG", "PNG", "GIF"}:
+                        return jsonify({"error": "Formato de archivo no permitido"}), 400
+                    image.verify()
+            except (OSError, ValueError):
+                return jsonify({"error": "Imagen no válida"}), 400
+            url = upload_to_cloudinary(temp_path)
+            return jsonify({"url": url})
+        except Exception:
+            app.logger.error("Falló la carga de imagen")
+            return jsonify({"error": "No se pudo subir la imagen"}), 500
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    app.logger.error("No se pudo limpiar el archivo temporal de imagen")
     return jsonify({"error": "Formato de archivo no permitido"}), 400
 
 
@@ -1567,6 +1582,7 @@ def _ensure_compras_bienes_tables():
             fecha_listado DATE NOT NULL,
             estado_relevamiento TEXT NOT NULL,
             proveedor VARCHAR(250),
+            valor_compra NUMERIC(14, 2),
             FOREIGN KEY(reporte_id) REFERENCES compras_bienes_reportes(id) ON DELETE CASCADE
         )
     """))
@@ -1583,6 +1599,8 @@ def _ensure_compras_bienes_tables():
         ))
     if "proveedor" not in item_columns:
         db.session.execute(text("ALTER TABLE compras_bienes_items ADD COLUMN proveedor VARCHAR(250)"))
+    if "valor_compra" not in item_columns:
+        db.session.execute(text("ALTER TABLE compras_bienes_items ADD COLUMN valor_compra NUMERIC(14, 2)"))
     db.session.execute(text(f"""
         CREATE TABLE IF NOT EXISTS compras_bienes_proveedores (
             id {id_sql},
@@ -1656,6 +1674,17 @@ def _compras_payload(data):
             datetime.strptime(fecha_listado, "%Y-%m-%d")
         except ValueError:
             raise ValueError("La fecha de listado es inválida")
+        valor_raw = raw.get("valor_compra")
+        valor_compra = None
+        if valor_raw is not None and str(valor_raw).strip() != "":
+            try:
+                valor_compra = Decimal(str(valor_raw))
+            except (ValueError, ArithmeticError):
+                raise ValueError("El valor de compra debe ser un número válido")
+            if (not valor_compra.is_finite() or valor_compra < 0
+                    or valor_compra > Decimal("999999999999.99")
+                    or valor_compra.as_tuple().exponent < -2):
+                raise ValueError("El valor de compra debe ser positivo y tener hasta dos decimales")
         items.append({
             "posible_ubicacion": _compras_text(raw, "posible_ubicacion", 250),
             "cantidad": cantidad,
@@ -1664,6 +1693,7 @@ def _compras_payload(data):
             "fecha_listado": fecha_listado,
             "estado_relevamiento": _compras_text(raw, "estado_relevamiento", 1000),
             "proveedor": _compras_text(raw, "proveedor", 250, required=False),
+            "valor_compra": valor_compra,
         })
     return anio, mes, _compras_text(data, "observaciones", 5000, required=False), items
 
@@ -1699,10 +1729,10 @@ def _insert_compras_items(reporte_id, items):
         db.session.execute(text("""
             INSERT INTO compras_bienes_items (
                 reporte_id, orden, posible_ubicacion, cantidad,
-                descripcion_factura, fecha_compra, fecha_listado, estado_relevamiento, proveedor
+                descripcion_factura, fecha_compra, fecha_listado, estado_relevamiento, proveedor, valor_compra
             ) VALUES (
                 :reporte_id, :orden, :posible_ubicacion, :cantidad,
-                :descripcion_factura, :fecha_compra, :fecha_listado, :estado_relevamiento, :proveedor
+                :descripcion_factura, :fecha_compra, :fecha_listado, :estado_relevamiento, :proveedor, :valor_compra
             )
         """), {"reporte_id": reporte_id, "orden": index, **item})
 
@@ -1741,6 +1771,35 @@ def crear_compras_bienes_proveedor():
     except Exception:
         db.session.rollback()
         return jsonify({"error": "No se pudo guardar el proveedor"}), 500
+
+
+@app.put("/api/compras-bienes/proveedores/<int:proveedor_id>")
+@compras_bienes_required_api
+def editar_compras_bienes_proveedor(proveedor_id):
+    if not _compras_admin():
+        return jsonify({"error": "forbidden"}), 403
+    try:
+        _ensure_compras_bienes_tables()
+        nombre = _compras_text(request.get_json(silent=True) or {}, "nombre", 250)
+        duplicate = db.session.execute(text(
+            "SELECT id FROM compras_bienes_proveedores WHERE LOWER(nombre) = LOWER(:nombre) AND id <> :id"
+        ), {"nombre": nombre, "id": proveedor_id}).first()
+        if duplicate:
+            return jsonify({"error": "Ya existe un proveedor con ese nombre"}), 409
+        row = db.session.execute(text(
+            "UPDATE compras_bienes_proveedores SET nombre = :nombre WHERE id = :id RETURNING id, nombre"
+        ), {"nombre": nombre, "id": proveedor_id}).mappings().first()
+        if not row:
+            db.session.rollback()
+            return jsonify({"error": "Proveedor no encontrado"}), 404
+        db.session.commit()
+        return jsonify(dict(row)), 200
+    except ValueError as error:
+        db.session.rollback()
+        return jsonify({"error": str(error)}), 400
+    except Exception:
+        db.session.rollback()
+        return jsonify({"error": "No se pudo editar el proveedor"}), 500
 
 
 @app.delete("/api/compras-bienes/proveedores/<int:proveedor_id>")
@@ -1808,7 +1867,7 @@ def obtener_compras_bienes_reporte(reporte_id):
         return jsonify({"error": "Reporte no encontrado"}), 404
     items = db.session.execute(text("""
         SELECT id, orden, posible_ubicacion, cantidad, descripcion_factura,
-               fecha_compra, fecha_listado, estado_relevamiento, proveedor
+               fecha_compra, fecha_listado, estado_relevamiento, proveedor, valor_compra
         FROM compras_bienes_items WHERE reporte_id = :id ORDER BY orden, id
     """), {"id": reporte_id}).mappings().all()
     messages = db.session.execute(text("""
@@ -1821,6 +1880,7 @@ def obtener_compras_bienes_reporte(reporte_id):
             **dict(item),
             "fecha_compra": str(item["fecha_compra"]),
             "fecha_listado": str(item["fecha_listado"] or item["fecha_compra"]),
+            "valor_compra": str(item["valor_compra"]) if item["valor_compra"] is not None else None,
         }
         for item in items
     ]
@@ -1835,7 +1895,20 @@ def actualizar_compras_bienes_reporte(reporte_id):
         return jsonify({"error": "forbidden"}), 403
     try:
         _ensure_compras_bienes_tables()
-        anio, mes, observaciones, items = _compras_payload(request.get_json(silent=True) or {})
+        data = request.get_json(silent=True) or {}
+        existing_values = dict(db.session.execute(text(
+            "SELECT id, valor_compra FROM compras_bienes_items WHERE reporte_id = :id"
+        ), {"id": reporte_id}).all())
+        raw_items = data.get("items")
+        for raw in raw_items if isinstance(raw_items, list) else []:
+            if isinstance(raw, dict) and "valor_compra" not in raw:
+                try:
+                    old_id = int(raw.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if old_id in existing_values:
+                    raw["valor_compra"] = existing_values[old_id]
+        anio, mes, observaciones, items = _compras_payload(data)
         updated = db.session.execute(text("""
             UPDATE compras_bienes_reportes
             SET anio = :anio, mes = :mes, observaciones = :observaciones,
@@ -2700,7 +2773,6 @@ def get_auditoria():
     params["limit"] = limit
     params["offset"] = offset
 
-    print("[/api/auditoria] SQL params:", params)
 
     try:
         with db.engine.connect() as conn:
@@ -2712,7 +2784,6 @@ def get_auditoria():
                 item["fecha"] = item.pop("fecha_formateada")
                 data.append(item)
 
-        print("[/api/auditoria] rows:", len(data))
         return jsonify(data), 200
     except Exception as e:
         print("[/api/auditoria] ERROR:", e)
@@ -5307,7 +5378,6 @@ def registrar_mobiliario():
         _ensure_mobiliario_valor_column()
         _ensure_mobiliario_foto_2_column()
         data = request.json or {}
-        print("🟢 Data recibida en /api/mobiliario:", data)
 
         # Diccionario de tipos de resolución formateados
         tipos_resolucion = {

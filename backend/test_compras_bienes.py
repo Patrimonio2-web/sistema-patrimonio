@@ -1,5 +1,6 @@
 import time
 import unittest
+from decimal import Decimal
 
 import app as backend
 
@@ -48,6 +49,20 @@ class ComprasBienesTests(unittest.TestCase):
         self.assertEqual(items[0]["fecha_listado"], "2026-03-02")
         self.assertEqual(items[0]["proveedor"], "Proveedor A")
         self.assertIsNone(items[1]["proveedor"])
+        self.assertIsNone(items[1]["valor_compra"])
+
+    def test_purchase_value_is_optional_and_uses_two_decimal_places(self):
+        item = {
+            "posible_ubicacion": "Tesoreria", "cantidad": 1,
+            "descripcion_factura": "Monitor", "fecha_compra": "2026-02-27",
+            "fecha_listado": "2026-03-02", "estado_relevamiento": "Encontrado",
+            "valor_compra": "1234.50",
+        }
+        payload = {"anio": 2026, "mes": 4, "items": [item]}
+        self.assertEqual(backend._compras_payload(payload)[3][0]["valor_compra"], Decimal("1234.50"))
+        for invalid in ("-1", "1.234", "NaN", "1000000000000"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                backend._compras_payload({**payload, "items": [{**item, "valor_compra": invalid}]})
 
     def test_report_requires_at_least_one_complete_item(self):
         with self.assertRaisesRegex(ValueError, "al menos un bien"):
@@ -67,6 +82,9 @@ class ComprasBienesTests(unittest.TestCase):
             backend.session["username"] = "Dante"
             self.assertTrue(backend._restricted_role_request_allowed("viewer"))
         with backend.app.test_request_context("/api/compras-bienes/proveedores", method="POST"):
+            backend.session["username"] = "Dante"
+            self.assertFalse(backend._restricted_role_request_allowed("viewer"))
+        with backend.app.test_request_context("/api/compras-bienes/proveedores/1", method="PUT"):
             backend.session["username"] = "Dante"
             self.assertFalse(backend._restricted_role_request_allowed("viewer"))
         with backend.app.test_request_context("/api/compras-bienes/reportes/1", method="PUT"):

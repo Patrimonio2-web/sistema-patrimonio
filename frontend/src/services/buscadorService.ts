@@ -110,11 +110,12 @@ function buildQueryString(params: BuscarMobiliarioParams) {
   return qs.toString();
 }
 
-export async function buscarMobiliario(params: BuscarMobiliarioParams): Promise<BuscarMobiliarioResponse> {
+export async function buscarMobiliario(params: BuscarMobiliarioParams, signal?: AbortSignal): Promise<BuscarMobiliarioResponse> {
   const queryString = buildQueryString(params);
   const res = await fetch(`${API_BASE}/mobiliario/buscar?${queryString}`, {
     credentials: "include",
     cache: "no-store",
+    signal,
   });
 
   if (!res.ok) {

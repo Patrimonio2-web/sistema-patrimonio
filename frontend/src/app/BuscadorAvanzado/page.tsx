@@ -1,7 +1,7 @@
 //src/app/BuscadorAvanzado/page.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { toast, Toaster } from "react-hot-toast";
 import {
@@ -93,6 +93,8 @@ export default function BuscadorAvanzadoPage() {
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [loading, setLoading] = useState(false);
+  const activeSearch = useRef<AbortController | null>(null);
+  const autoSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [anexos, setAnexos] = useState<AnexoOption[]>([]);
   const [subdependencias, setSubdependencias] = useState<SubdependenciaOption[]>([]);
@@ -176,7 +178,14 @@ export default function BuscadorAvanzadoPage() {
   };
 
   const handleSearch = useCallback(
-    async (nextPage = page) => {
+    async (nextPage = 1) => {
+      if (autoSearchTimer.current) {
+        clearTimeout(autoSearchTimer.current);
+        autoSearchTimer.current = null;
+      }
+      activeSearch.current?.abort();
+      const controller = new AbortController();
+      activeSearch.current = controller;
       try {
         setLoading(true);
 
@@ -196,17 +205,23 @@ export default function BuscadorAvanzadoPage() {
           per_page: perPage,
           order_by: isNumericQuery ? "id" : orderBy,
           order_dir: isNumericQuery ? "asc" : orderDir,
-        });
+        }, controller.signal);
+
+        if (controller.signal.aborted) return;
 
         setItems(data.items);
         setTotal(data.meta.total);
         setPages(data.meta.pages || 1);
         setPage(data.meta.page);
       } catch (e) {
+        if (controller.signal.aborted) return;
         const msg = e instanceof Error ? e.message : "Error al buscar";
         toast.error(msg);
       } finally {
-        setLoading(false);
+        if (activeSearch.current === controller) {
+          activeSearch.current = null;
+          setLoading(false);
+        }
       }
     },
     [
@@ -216,7 +231,6 @@ export default function BuscadorAvanzadoPage() {
       flags,
       orderBy,
       orderDir,
-      page,
       query,
       searchField,
       rubroId,
@@ -232,11 +246,25 @@ export default function BuscadorAvanzadoPage() {
     const timer = setTimeout(() => {
       handleSearch(1);
     }, 450);
+    autoSearchTimer.current = timer;
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      if (autoSearchTimer.current === timer) autoSearchTimer.current = null;
+      activeSearch.current?.abort();
+    };
   }, [query, handleSearch]);
 
+  useEffect(() => () => activeSearch.current?.abort(), []);
+
   const handleReset = () => {
+    if (autoSearchTimer.current) {
+      clearTimeout(autoSearchTimer.current);
+      autoSearchTimer.current = null;
+    }
+    activeSearch.current?.abort();
+    activeSearch.current = null;
+    setLoading(false);
     setQuery("");
     setSearchField("descripcion");
     setAnexoId("");

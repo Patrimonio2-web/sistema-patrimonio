@@ -32,6 +32,7 @@ import { getAuthUser } from "@/services/authRole";
 import {
   enviarMensajeCompras,
   crearProveedorCompras,
+  editarProveedorCompras,
   eliminarProveedorCompras,
   guardarReporteCompras,
   listarProveedoresCompras,
@@ -77,6 +78,7 @@ function emptyItem(): CompraBienItem {
     fecha_listado: "",
     estado_relevamiento: "",
     proveedor: "",
+    valor_compra: "",
   };
 }
 
@@ -90,6 +92,11 @@ function formatDate(value?: string | null, withTime = false) {
       ? { dateStyle: "short", timeStyle: "short" }
       : { dateStyle: "short" }
   ).format(date);
+}
+
+function formatMoney(value?: string | null) {
+  if (value == null || value === "") return "-";
+  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS" }).format(Number(value));
 }
 
 function surveyStateClasses(state: string) {
@@ -227,6 +234,8 @@ export default function ComprasBienesPage() {
   const [providersOpen, setProvidersOpen] = useState(false);
   const [providerName, setProviderName] = useState("");
   const [savingProvider, setSavingProvider] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
+  const [editingProviderName, setEditingProviderName] = useState("");
 
   useEffect(() => {
     if (!canEdit) return;
@@ -257,6 +266,23 @@ export default function ComprasBienesPage() {
       toast.success("Proveedor quitado de la lista.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo quitar el proveedor.");
+    }
+  };
+
+  const saveProviderEdit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (editingProviderId === null || !editingProviderName.trim()) return;
+    try {
+      setSavingProvider(true);
+      const saved = await editarProveedorCompras(editingProviderId, editingProviderName.trim());
+      setProviders((current) => current.map((item) => item.id === saved.id ? saved : item).sort((a, b) => a.nombre.localeCompare(b.nombre, "es")));
+      setEditingProviderId(null);
+      setEditingProviderName("");
+      toast.success("Proveedor actualizado. Los reportes anteriores conservan el nombre guardado.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo editar el proveedor.");
+    } finally {
+      setSavingProvider(false);
     }
   };
 
@@ -545,7 +571,19 @@ export default function ComprasBienesPage() {
               <button type="submit" disabled={savingProvider} className="inline-flex h-10 shrink-0 items-center gap-1 rounded-md bg-cyan-700 px-3 text-sm font-bold text-white hover:bg-cyan-800 disabled:opacity-60"><Plus className="h-4 w-4" /> Agregar</button>
             </form>
             <div className="min-h-0 overflow-y-auto p-4">
-              {providers.length ? <ul className="divide-y divide-slate-200 dark:divide-slate-700">{providers.map((provider) => <li key={provider.id} className="flex items-center justify-between gap-3 py-2"><span className="min-w-0 break-words text-sm font-semibold">{provider.nombre}</span><button type="button" onClick={() => void removeProvider(provider.id)} title={`Quitar ${provider.nombre}`} aria-label={`Quitar ${provider.nombre}`} className="rounded-md p-2 text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950"><Trash2 className="h-4 w-4" /></button></li>)}</ul> : <p className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Todavía no hay proveedores.</p>}
+              {providers.length ? <ul className="divide-y divide-slate-200 dark:divide-slate-700">{providers.map((provider) => <li key={provider.id} className="flex items-center justify-between gap-3 py-2">
+                {editingProviderId === provider.id ? (
+                  <form onSubmit={saveProviderEdit} className="flex min-w-0 flex-1 items-center gap-2">
+                    <input required maxLength={250} value={editingProviderName} onChange={(event) => setEditingProviderName(event.target.value)} aria-label={`Editar ${provider.nombre}`} className={fieldClass} />
+                    <button type="submit" disabled={savingProvider} aria-label="Guardar proveedor" className="rounded-md p-2 text-emerald-700 disabled:opacity-50"><Save className="h-4 w-4" /></button>
+                    <button type="button" onClick={() => setEditingProviderId(null)} aria-label="Cancelar edición" className="rounded-md p-2"><X className="h-4 w-4" /></button>
+                  </form>
+                ) : <>
+                  <span className="min-w-0 flex-1 break-words text-sm font-semibold">{provider.nombre}</span>
+                  <button type="button" onClick={() => { setEditingProviderId(provider.id); setEditingProviderName(provider.nombre); }} title={`Editar ${provider.nombre}`} aria-label={`Editar ${provider.nombre}`} className="rounded-md p-2 text-cyan-700 hover:bg-cyan-50 dark:text-cyan-300"><Pencil className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => void removeProvider(provider.id)} title={`Quitar ${provider.nombre}`} aria-label={`Quitar ${provider.nombre}`} className="rounded-md p-2 text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-950"><Trash2 className="h-4 w-4" /></button>
+                </>}
+              </li>)}</ul> : <p className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Todavía no hay proveedores.</p>}
             </div>
           </div>
         </div>
@@ -637,11 +675,12 @@ function ReportForm({
       </div>
 
       <div className="overflow-x-auto">
-        <div className="min-w-[1380px]">
-          <div className="grid grid-cols-[1.05fr_90px_1.55fr_180px_180px_1.75fr_48px] bg-slate-800 text-xs font-black uppercase text-white dark:bg-slate-950">
+        <div className="min-w-[1510px]">
+          <div className="grid grid-cols-[1.05fr_90px_1.55fr_130px_180px_180px_1.75fr_48px] bg-slate-800 text-xs font-black uppercase text-white dark:bg-slate-950">
             <span className="p-3">Posible ubicación</span>
             <span className="p-3">Cantidad</span>
             <span className="p-3">Descripción y proveedor</span>
+            <span className="p-3">Valor compra (ARS)</span>
             <span className="p-3">Fecha de factura</span>
             <span className="p-3">Fecha de listado</span>
             <span className="p-3">Estado según relevamiento</span>
@@ -651,7 +690,7 @@ function ReportForm({
           {items.map((item, index) => (
             <div
               key={index}
-              className="grid grid-cols-[1.05fr_90px_1.55fr_180px_180px_1.75fr_48px] items-start gap-2 border-t border-slate-300 bg-white p-2 even:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:even:bg-slate-800/55"
+              className="grid grid-cols-[1.05fr_90px_1.55fr_130px_180px_180px_1.75fr_48px] items-start gap-2 border-t border-slate-300 bg-white p-2 even:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:even:bg-slate-800/55"
             >
               <input
                 required
@@ -689,6 +728,7 @@ function ReportForm({
                 <button type="button" onClick={onManageProviders} title="Administrar proveedores" aria-label="Administrar proveedores" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 text-cyan-800 hover:bg-cyan-50 dark:border-slate-600 dark:text-cyan-300 dark:hover:bg-slate-800"><Plus className="h-4 w-4" /></button>
               </div>
               </div>
+              <input type="number" min="0" max="999999999999.99" step="0.01" inputMode="decimal" value={item.valor_compra ?? ""} onChange={(event) => updateItem(index, "valor_compra", event.target.value)} aria-label={`Valor de compra en pesos, fila ${index + 1}`} placeholder="Opcional" className={fieldClass} />
               <PurchaseDateInput
                 value={item.fecha_compra}
                 onChange={(nextValue) =>
@@ -925,6 +965,7 @@ function ReportDetail({
               <th className="border-r border-slate-600 p-3">Posible ubicación</th>
               <th className="border-r border-slate-600 p-3 text-center">Cantidad</th>
               <th className="border-r border-slate-600 p-3">Descripción según factura</th>
+              <th className="border-r border-slate-600 p-3 text-right">Valor compra (ARS)</th>
               <th className="border-r border-slate-600 p-3">Fecha de factura</th>
               <th className="border-r border-slate-600 p-3">Fecha de listado</th>
               <th className="p-3">Estado según relevamiento</th>
@@ -946,6 +987,7 @@ function ReportDetail({
                   {item.descripcion_factura}
                   {item.proveedor && <span className="mt-2 block text-xs font-bold text-cyan-800 dark:text-cyan-300">Proveedor: {item.proveedor}</span>}
                 </td>
+                <td className="border-r border-slate-200 p-3 text-right font-semibold dark:border-slate-700">{formatMoney(item.valor_compra)}</td>
                 <td className="border-r border-slate-200 p-3 dark:border-slate-700">
                   {formatDate(`${item.fecha_compra}T12:00:00`)}
                 </td>

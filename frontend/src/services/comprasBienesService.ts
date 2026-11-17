@@ -12,6 +12,7 @@ export type CompraBienItem = {
   fecha_listado: string;
   estado_relevamiento: string;
   proveedor?: string;
+  valor_compra?: string | null;
 };
 
 export type CompraProveedor = { id: number; nombre: string };
@@ -67,6 +68,15 @@ export async function crearProveedorCompras(nombre: string): Promise<CompraProve
     body: JSON.stringify({ nombre }),
   });
   if (!response.ok) throw new Error(await errorMessage(response, "No se pudo guardar el proveedor"));
+  return response.json();
+}
+
+export async function editarProveedorCompras(id: number, nombre: string): Promise<CompraProveedor> {
+  const response = await fetch(`${API_BASE}/compras-bienes/proveedores/${id}`, {
+    method: "PUT", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ nombre }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response, "No se pudo editar el proveedor"));
   return response.json();
 }
 
