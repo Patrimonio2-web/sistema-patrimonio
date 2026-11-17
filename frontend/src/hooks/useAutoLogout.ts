@@ -55,7 +55,7 @@ export function useAutoLogout(enabled: boolean, timeoutMs = DEFAULT_IDLE_TIMEOUT
 
       if (now - lastHeartbeat >= HEARTBEAT_INTERVAL_MS) {
         lastHeartbeat = now;
-        me()
+        me(true)
           .then((user) => {
             if (!user) void expireSession();
           })

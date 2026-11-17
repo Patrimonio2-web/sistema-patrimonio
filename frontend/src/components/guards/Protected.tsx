@@ -109,7 +109,7 @@ export default function Protected({ children }: { children: React.ReactNode }) {
   const pathIsReady = checkedPath === pathname || sessionAllowsCurrentPath;
 
   useAutoLogout(
-    !checking && pathIsReady && !isPublicPath && !isPasswordChangePath
+    !checking && pathIsReady && !isPublicPath
   );
 
   useEffect(() => {

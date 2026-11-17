@@ -51,12 +51,12 @@ export async function login(username: string, password: string): Promise<AuthSes
   return res.json();
 }
 
-export async function me(): Promise<AuthSession | null> {
+export async function me(activity = false): Promise<AuthSession | null> {
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), 12_000);
 
   try {
-    const res = await fetch(`${API_BASE}/me`, {
+    const res = await fetch(`${API_BASE}/me${activity ? "?activity=1" : ""}`, {
       method: "GET",
       credentials: "include",
       cache: "no-store",

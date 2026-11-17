@@ -581,7 +581,7 @@ def proteger_api():
             return jsonify({"error": "session_expired"}), 401
 
     if request.endpoint in PUBLIC_API_ENDPOINTS:
-        if _session_has_auth() and request.endpoint == "api_me":
+        if _session_has_auth() and request.endpoint == "api_me" and request.args.get("activity") == "1":
             _touch_session_activity()
         return None
 
@@ -612,8 +612,6 @@ def proteger_api():
     if request.method in UNSAFE_METHODS and request.endpoint not in CSRF_EXEMPT_ENDPOINTS:
         if not _csrf_token_valid():
             return jsonify({"error": "csrf_invalid"}), 403
-
-    _touch_session_activity()
 
     return None
 
