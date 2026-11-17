@@ -3,7 +3,7 @@
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "scripts": {
-    "dev": "pnpm --dir frontend dev",
+    "dev": "node scripts/dev.mjs",
     "build": "pnpm --dir frontend build",
     "start": "pnpm --dir frontend start",
     "lint": "pnpm --dir frontend lint",

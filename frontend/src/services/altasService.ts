@@ -118,5 +118,5 @@ export async function eliminarAlta(id: number) {
 }
 
 export function altasPdfUrl(filtros: AltasFiltros = {}) {
-  return `/altas/exportar_pdf${buildQuery(filtros)}`;
+  return `/altas/imprimir${buildQuery(filtros)}`;
 }

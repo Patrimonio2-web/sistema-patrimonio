@@ -1,6 +1,6 @@
 from flask import (
-    Flask, render_template, request, redirect, url_for, send_file,
-    jsonify, session, flash, Blueprint, render_template_string
+    Flask, request, redirect, url_for, send_file,
+    jsonify, session, flash, Blueprint
 )
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -19,19 +19,17 @@ import pytz
 import cloudinary, cloudinary.uploader
 import psycopg2, psycopg2.extras
 import qrcode
-import pandas as pd
 from dotenv import load_dotenv
 from urllib.parse import urlencode, urlparse
 
 from functools import wraps
 from PIL import Image, ImageDraw, ImageFont
-from openpyxl import Workbook
 
 
 # ===================== APP & CONFIG =====================
 load_dotenv()
 
-IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT_ID") or os.getenv("RENDER") or os.getenv("RENDER_EXTERNAL_URL"))
+IS_PRODUCTION = bool(os.getenv("RAILWAY_ENVIRONMENT_ID"))
 
 
 def _split_env_list(name, fallback=None):
@@ -93,7 +91,7 @@ CORS(
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
-# Cookies de sesion para cross-site (Vercel <-> Render).
+# Cookies de sesion para acceso HTTPS.
 app.config["SESSION_COOKIE_SAMESITE"] = "None"
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -159,10 +157,6 @@ def login_required_api(f):
 
 def _main_username():
     return session.get("username")
-
-
-def _personal_username():
-    return session.get("username_personal")
 
 
 SUPERADMIN_USERNAMES = {
@@ -321,7 +315,7 @@ def _csrf_token_valid():
 
 
 def _session_has_auth():
-    return bool(_main_username() or _personal_username())
+    return bool(_main_username())
 
 
 def _ensure_password_change_required_column():
@@ -381,8 +375,6 @@ def _clear_auth_session():
     for key in (
         "username",
         "role",
-        "username_personal",
-        "role_personal",
         "csrf_token",
         "last_activity",
         "user_checked_at",
@@ -405,6 +397,15 @@ def _session_idle_expired():
 
 def _touch_session_activity():
     session["last_activity"] = time.time()
+
+
+def editor_required_api(f):
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        if not _main_username() or _is_viewer_session():
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return wrapped
 
 
 def admin_required_api(f):
@@ -474,22 +475,10 @@ def hernan_required_api(f):
     return wrapped
 
 
-def personal_required_api(f):
-    @wraps(f)
-    def wrapped(*args, **kwargs):
-        if _personal_username() or (_main_username() and not _is_viewer_session()):
-            return f(*args, **kwargs)
-        return jsonify({"error": "unauthorized"}), 401
-    return wrapped
-
-
 PUBLIC_API_ENDPOINTS = {
     "api_login",
     "api_logout",
     "api_me",
-    "api_login_personal",
-    "api_logout_personal",
-    "api_me_personal",
     "mobiliario_advertencia_por_id",
     "directorio_publico_anexo",
     "directorio_publico_configurado",
@@ -499,8 +488,6 @@ PUBLIC_API_ENDPOINTS = {
 IDLE_EXEMPT_ENDPOINTS = {
     "api_login",
     "api_logout",
-    "api_login_personal",
-    "api_logout_personal",
     "mobiliario_advertencia_por_id",
     "directorio_publico_anexo",
     "directorio_publico_configurado",
@@ -584,8 +571,6 @@ def proteger_api():
     if _main_username() and request.endpoint not in {
         "api_login",
         "api_logout",
-        "api_login_personal",
-        "api_logout_personal",
     }:
         if not _refresh_main_session_from_db():
             return jsonify({"error": "unauthorized"}), 401
@@ -596,7 +581,7 @@ def proteger_api():
             return jsonify({"error": "session_expired"}), 401
 
     if request.endpoint in PUBLIC_API_ENDPOINTS:
-        if _session_has_auth() and request.endpoint in {"api_me", "api_me_personal"}:
+        if _session_has_auth() and request.endpoint == "api_me":
             _touch_session_activity()
         return None
 
@@ -707,25 +692,6 @@ class Anexo(db.Model):
     nombre = db.Column(db.String(255), nullable=False)
     direccion = db.Column(db.Text)
 
-class UsuarioPersonal(db.Model):
-    __tablename__ = 'usuariospersonal'
-
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password = db.Column(db.String(255), nullable=False)  # hash
-    role = db.Column(db.String(20), nullable=False, default='personal')
-    activo = db.Column(db.Boolean, nullable=False, default=True)
-    fecha_creacion = db.Column(db.DateTime, server_default=db.func.now())
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "username": self.username,
-            "role": self.role,
-            "activo": self.activo,
-            "fecha_creacion": self.fecha_creacion
-        }
-
 class Usuario(db.Model):
     __tablename__ = 'usuarios'
     id = db.Column(db.Integer, primary_key=True)
@@ -787,51 +753,6 @@ class Auditoria(db.Model):
             "user_agent": self.user_agent,
             "usuario": self.usuario
         }
-
-class Agente(db.Model):
-    __tablename__ = 'agentes'
-    id = db.Column(db.Integer, primary_key=True)
-    legajo = db.Column(db.String(20), unique=True, nullable=False)
-    dni_cuil = db.Column(db.String(20), nullable=False)
-    apellido = db.Column(db.String(100), nullable=False)
-    nombre = db.Column(db.String(100), nullable=False)
-
-    id_anexo = db.Column(db.Integer, db.ForeignKey('anexos.id', ondelete='SET NULL'))
-    id_subdependencia = db.Column(db.Integer, db.ForeignKey('subdependencias.id', ondelete='SET NULL'))
-
-    categoria = db.Column(db.String(10))
-    tipo = db.Column(db.String(50))
-    cargo = db.Column(db.String(100))
-    telefono = db.Column(db.String(30))
-    email = db.Column(db.String(150))
-    foto_url = db.Column(db.Text)
-    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
-
-    anexo = db.relationship('Anexo', backref='agentes', lazy=True)
-    subdependencia = db.relationship('Subdependencia', backref='agentes', lazy=True)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "legajo": self.legajo,
-            "dni_cuil": self.dni_cuil,
-            "apellido": self.apellido,
-            "nombre": self.nombre,
-            "categoria": self.categoria,
-            "tipo": self.tipo,
-            "cargo": self.cargo,
-            "telefono": self.telefono,
-            "email": self.email,
-            "foto_url": self.foto_url,
-            "id_anexo": self.id_anexo,
-            "id_subdependencia": self.id_subdependencia,
-            "anexo": self.anexo.nombre if self.anexo else None,
-            "subdependencia": self.subdependencia.nombre if self.subdependencia else None,
-            "fecha_creacion": self.fecha_creacion.strftime("%d/%m/%Y %H:%M") if self.fecha_creacion else None
-        }
-
-
-
 
 class Mobiliario(db.Model):
     __tablename__ = 'mobiliario'
@@ -1034,7 +955,7 @@ def upload_to_cloudinary(filepath):
     return result.get("secure_url")
 
 @app.route('/api/uploads', methods=['POST'])
-@personal_required_api
+@editor_required_api
 def subir_imagen():
     if 'foto' not in request.files:
         return jsonify({"error": "No se envió la imagen"}), 400
@@ -2654,7 +2575,7 @@ def registrar_auditoria(accion, tabla, id_registro, before=None, after=None, des
     Guarda la fecha en AR usando timezone('America/Argentina/Buenos_Aires', now()) en SQL.
     """
     try:
-        usuario = session.get("username") or session.get("username_personal") or "desconocido"
+        usuario = session.get("username") or "desconocido"
         ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
         ua = request.headers.get("User-Agent") or ""
 
@@ -2801,7 +2722,7 @@ def get_auditoria():
 # --- vista para ver la auditoría ---
 @app.route("/auditoria")
 def vista_auditoria():
-    return render_template("auditoria.html")
+    return redirect(f"{FRONTEND_PUBLIC_URL}/Auditoria", code=302)
 
 @app.route("/api/subdependencias_por_anexo/<anexo_id>")
 def subdependencias_por_anexo(anexo_id):
@@ -2882,7 +2803,7 @@ from sqlalchemy.exc import IntegrityError
 
 @app.route('/editaranexos')
 def editar_anexos():
-    return render_template('editaranexos.html')
+    return redirect(f"{FRONTEND_PUBLIC_URL}/Anexos", code=302)
 
 
 
@@ -5724,22 +5645,20 @@ def obtener_mobiliarios_para_baja():
 
 from datetime import datetime
 import qrcode
-from flask import send_file, url_for, request, render_template
+from flask import send_file, url_for, request
 from PIL import Image, ImageDraw, ImageFont
 import io
 
 @app.route('/mobiliario/ver_etiqueta/<string:id>')
 def ver_etiqueta(id):
-    etiqueta_url = url_for('generar_etiqueta', id=id)
-    return render_template('ver_etiqueta.html', id=id, etiqueta_url=etiqueta_url)
+    return redirect(f"{FRONTEND_PUBLIC_URL}/etiqueta/{id}", code=302)
         
 @app.route('/Etiqueta/<string:id>')
 def ver_mobiliario_por_id(id):
     return f"Mobiliario {id}"
 @app.route('/mobiliario/etiqueta/ver/<string:id>')
 def ver_etiqueta_para_imprimir(id):
-    etiqueta_url = url_for('generar_etiqueta', id=id)
-    return render_template('ver_etiqueta.html', id=id, etiqueta_url=etiqueta_url)
+    return redirect(f"{FRONTEND_PUBLIC_URL}/etiqueta/{id}", code=302)
 
 
 @app.route('/mobiliario/etiqueta/<string:id>')
@@ -6157,211 +6076,13 @@ def inventario_publico_subdependencia(id_subdependencia):
 
 @app.route('/imprimir')
 def imprimir():
-    # 🔹 Cargar datos base
-    anexos = Anexo.query.order_by(Anexo.nombre.asc()).all()
-    subdependencias = Subdependencia.query.order_by(Subdependencia.nombre.asc()).all()
-    rubros = Rubro.query.order_by(Rubro.nombre.asc()).all()
-    clases = ClaseBien.query.order_by(ClaseBien.descripcion.asc()).all()
-
-    # 🔹 Diccionario de etiquetas de filtros
-    campos = {
-        "no_dado": "No Dado",
-        "para_reparacion": "Reparación",
-        "para_baja": "Para baja",
-        "faltante": "Faltante",
-        "sobrante": "Sobrante",
-        "problema_etiqueta": "Problema etiqueta"
-    }
-
-    # 🔹 Filtros seleccionados (desde los checkboxes del GET)
-    filtros_estado = request.args.getlist('estado')
-    filtros_conservacion = request.args.getlist('conservacion')
-
-    # 🔹 Inicialmente sin resultados
-    mobiliario = []
-
-    return render_template(
-        'imprimir.html',
-        anexos=anexos,
-        subdependencias=subdependencias,
-        rubros=rubros,
-        clases=clases,
-        campos=campos,
-        filtros_estado=filtros_estado,
-        filtros_conservacion=filtros_conservacion,
-        mobiliario=mobiliario
-    )
+    return redirect(f"{FRONTEND_PUBLIC_URL}/ListadosGenerales", code=302)
 
 
-
-
-from datetime import datetime
-
-from datetime import datetime
-
-from flask import request, render_template
-from datetime import datetime
 @app.route('/imprimir_listado')
 def imprimir_listado():
-    from datetime import datetime
-    conn, cur = get_conn_dict()
-
-    # --- Parámetros GET ---
-    anexo_id = request.args.get('anexo')
-    subdep_id = request.args.get('subdependencia')
-    rubro_id = request.args.get('rubro')
-    clase_id = request.args.get('clase')
-    estado_conservacion = request.args.get('estado_conservacion')
-    tipo_listado = request.args.get('tipo_listado', 'clasico')
-    filtros = request.args.getlist('filtros')
-
-    # 🔥 NUEVO: detectar si quieren incluir faltantes
-    incluir_faltantes = request.args.get("incluir_faltantes", "false").lower() == "true"
-
-    # --- Nombre de anexo y subdependencia (maneja "todos"/"todas") ---
-    if anexo_id and anexo_id.isdigit():
-        cur.execute("SELECT nombre FROM anexos WHERE id = %s", (anexo_id,))
-        row = cur.fetchone()
-        anexo_nombre = row[0] if row else "Todos"
-    else:
-        anexo_nombre = "Todos"
-
-    if subdep_id and subdep_id.isdigit():
-        cur.execute("SELECT nombre FROM subdependencias WHERE id = %s", (subdep_id,))
-        row = cur.fetchone()
-        subdependencia_nombre = row[0] if row else "Todas"
-    else:
-        subdependencia_nombre = "Todas"
-
-    # --- Base query ---
-    query = """
-        SELECT 
-            r.nombre AS rubro,
-            c.descripcion AS clase,
-            m.id AS id_mobiliario,
-            m.descripcion,
-            m.estado_conservacion,
-            m.no_dado,
-            m.para_reparacion,
-            m.para_baja,
-            m.faltante,
-            m.sobrante,
-            m.problema_etiqueta,
-            r.id_rubro AS rubro_id,
-            c.id_clase AS clase_id
-        FROM mobiliario m
-        LEFT JOIN rubros r ON m.rubro_id = r.id_rubro
-        LEFT JOIN clases_bienes c ON m.clase_bien_id = c.id_clase
-        LEFT JOIN subdependencias s ON m.ubicacion_id = s.id
-        LEFT JOIN anexos a ON s.id_anexo = a.id
-        WHERE 1=1
-    """
-
-    params = []
-
-    # --- Filtros por Anexo y Subdependencia ---
-    if anexo_id and anexo_id.isdigit():
-        query += " AND a.id = %s"
-        params.append(anexo_id)
-
-    if subdep_id and subdep_id.isdigit():
-        query += " AND s.id = %s"
-        params.append(subdep_id)
-
-    # --- Filtros por Rubro, Clase y Estado ---
-    if rubro_id and rubro_id.isdigit():
-        query += " AND m.rubro_id = %s"
-        params.append(rubro_id)
-
-    if clase_id and clase_id.isdigit():
-        query += " AND m.clase_bien_id = %s"
-        params.append(clase_id)
-
-    if estado_conservacion:
-        query += " AND m.estado_conservacion = %s"
-        params.append(estado_conservacion)
-
-    # --- Filtros de estado (checkboxes) ---
-    for f in filtros:
-        query += f" AND m.{f} = TRUE"
-
-    # 🔥🔥 NUEVO BLOQUE — Excluir faltantes si NO marcaron incluir faltantes
-    if not incluir_faltantes:
-        query += " AND (m.faltante IS NULL OR m.faltante = FALSE)"
-
-    query += " ORDER BY r.nombre, c.descripcion, m.id ASC"
-
-    # --- Ejecutar y procesar ---
-    cur.execute(query, tuple(params))
-    resultados = cur.fetchall()
-    conn.close()
-
-    # --- Agrupar Rubro > Clase ---
-    grupos = {}
-    
-    for fila in resultados:
-        rubro_nombre = fila[0] or "SIN RUBRO"
-        clase_nombre = fila[1] or "SIN CLASE"
-    
-        rubro_id = fila[11]  # r.id_rubro
-        clase_id = fila[12]  # c.id_clase
-    
-        # Llaves únicas usando ID + nombre
-        rubro_key = f"{rubro_id}|{rubro_nombre}"
-        clase_key = f"{clase_id}|{clase_nombre}"
-    
-        grupos.setdefault(rubro_key, {}).setdefault(clase_key, []).append(fila)
-
-
-
-
-    total_bienes = sum(len(items) for clases in grupos.values() for items in clases.values())
-
-    # --- Elegir plantilla ---
-    plantilla = "listado_impresion_entrega.html" if tipo_listado == "entrega" else "listado_impresion.html"
-
-    return render_template(
-        plantilla,
-        grupos=grupos,
-        anexo_nombre=anexo_nombre,
-        subdependencia_nombre=subdependencia_nombre,
-        ahora=datetime.now(),
-        filtros=filtros,
-        estado_conservacion=estado_conservacion,
-        total_bienes=total_bienes
-    )
-
-
-
-
-
-
-
-
-# 🧩 Funciones auxiliares opcionales
-def obtener_nombre_anexo(anexo_id):
-    if not anexo_id or anexo_id == "todos":
-        return "Todos"
-    conn = db.engine.raw_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT nombre FROM anexos WHERE id = %s", (anexo_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else "Desconocido"
-
-def obtener_nombre_subdependencia(sub_id):
-    if not sub_id or sub_id == "todas":
-        return "Todas"
-    conn = db.engine.raw_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT nombre FROM subdependencias WHERE id = %s", (sub_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else "Desconocida"
-
-
-
-
+    query = f"?{request.query_string.decode('utf-8')}" if request.query_string else ""
+    return redirect(f"{FRONTEND_PUBLIC_URL}/ListadosGenerales/preview{query}", code=302)
 
 
 # --- Serializer simple para enviar lo que la vista espera ---
@@ -6429,86 +6150,12 @@ def mobiliario_filtrado():
     ])
 
 
-from flask import render_template_string
-from datetime import datetime
-
-from flask import render_template_string, request
-from datetime import datetime
-
 @app.route('/imprimir_listado_preview')
 def imprimir_listado_preview():
-    anexo_id = request.args.get('anexo')
-    sub_id = request.args.get('subdependencia')
-    filtros = request.args.get('filtros', '').split(',')
-    incluir_faltantes = request.args.get("incluir_faltantes", "false").lower() == "true"
-    estado_conservacion = request.args.get("estado_conservacion")
-
-    # Base de la consulta
-    query = """
-        SELECT m.descripcion, m.id, m.estado_conservacion
-        FROM mobiliario m
-        JOIN subdependencias sd ON m.ubicacion_id = sd.id
-        JOIN anexos a ON sd.id_anexo = a.id
-        WHERE a.id = %s AND sd.id = %s
-    """
-    params = [anexo_id, sub_id]
-
-    # Filtros booleanos (checkboxes)
-    for campo in filtros:
-        if campo and campo != "faltante":
-            query += f" AND m.{campo} = TRUE"
-
-    # Incluir o excluir faltantes
-    if not incluir_faltantes:
-        query += " AND (m.faltante IS NULL OR m.faltante = FALSE)"
-
-    # Filtro por estado de conservación
-    if estado_conservacion:
-        query += " AND m.estado_conservacion = %s"
-        params.append(estado_conservacion)
-
-    # Ejecutar consulta
-    conn = db.engine.raw_connection()
-    cur = conn.cursor()
-    cur.execute(query, tuple(params))
-    mobiliarios = cur.fetchall()
-    conn.close()
-
-    # Render rápido en HTML (preview)
-    return render_template_string("""
-    <table class="w-full table-auto border border-gray-300 text-sm mt-4">
-      <thead class="bg-gray-100">
-        <tr>
-          <th class="border px-2 py-1 text-left">Descripción</th>
-          <th class="border px-2 py-1 text-center">ID</th>
-          <th class="border px-2 py-1 text-center">Estado de conservación</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for m in mobiliarios %}
-        <tr class="hover:bg-gray-50">
-          <td class="border px-2 py-1">{{ m[0] }}</td>
-          <td class="border px-2 py-1 text-center">{{ m[1] }}</td>
-          <td class="border px-2 py-1 text-center">{{ m[2] or '-' }}</td>
-        </tr>
-        {% endfor %}
-        {% if mobiliarios|length == 0 %}
-        <tr>
-          <td colspan="3" class="text-center p-4 text-gray-500">
-            No se encontraron resultados con los filtros seleccionados.
-          </td>
-        </tr>
-        {% endif %}
-      </tbody>
-    </table>
-    """, mobiliarios=mobiliarios)
+    query = f"?{request.query_string.decode('utf-8')}" if request.query_string else ""
+    return redirect(f"{FRONTEND_PUBLIC_URL}/ListadosGenerales/preview{query}", code=302)
 
 
-
-
-# =========================
-# NUEVA API JSON PARA NEXT
-# =========================
 @app.route('/api/listados/generar-json', methods=['GET'])
 def generar_listado_json():
     try:
@@ -6731,218 +6378,24 @@ def generar_listado_json():
 # sistema para planillas --------------------------------------------------------------------------------------------------------------------------------------------------
 
 
-from flask import Flask, Blueprint, render_template, request, redirect, send_file,flash,url_for
-import pandas as pd
-from io import BytesIO
-from datetime import datetime
-import psycopg2
-from openpyxl import Workbook
 
 
 
 
 # 📌 Conexión directa a Render PostgreSQL
-def get_db_connection():
-    return psycopg2.connect(
-        DATABASE_URL,
-        sslmode=os.getenv("DB_SSLMODE", "require")
-    )
-
 # 📦 Blueprint
 bp = Blueprint('altas', __name__)
 
-@bp.route('/altas', methods=['GET', 'POST'])
+@bp.route('/altas', methods=['GET'])
 def altas():
-    if request.method == 'POST':
-        data = request.form
-
-        def parse_numeric(value):
-            try:
-                if isinstance(value, str):
-                    value = value.replace("$", "").replace(",", ".").strip()
-                return float(value)
-            except (ValueError, TypeError):
-                return 0.0
-
-        # ✅ Recolección segura de datos
-        fecha_alta = data['fecha_alta']
-        cantidad = int(data['cantidad']) if data['cantidad'] else None
-        concepto = data['concepto']
-        disposicion = data['disposicion']
-        fecha_resolucion = data.get('fecha_resolucion')  # ← nuevo campo
-        valor_unitario = parse_numeric(data.get('valor_unitario'))
-        valor_total = parse_numeric(data.get('valor_total'))
-        causa_alta = data['causa_alta']
-        codigo_presup = data['codigo_presup']
-        identidad = data['identidad']
-        mes_planilla = data['mes_planilla']
-        anio_planilla = data['anio_planilla']
-        id_rubro = int(data['id_rubro']) if data['id_rubro'] else None
-        id_clase = int(data['id_clase']) if data['id_clase'] else 0
-
-        # ✅ Ejecutar INSERT con fecha_resolucion incluida
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO movimientos_altas (
-                        fecha_alta, cantidad, concepto, disposicion, fecha_resolucion,
-                        valor_unitario, valor_total, causa_alta,
-                        codigo_presup, identidad,
-                        mes_planilla, anio_planilla, id_rubro, id_clase
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    fecha_alta,
-                    cantidad,
-                    concepto,
-                    disposicion,
-                    fecha_resolucion,
-                    valor_unitario,
-                    valor_total,
-                    causa_alta,
-                    codigo_presup,
-                    identidad,
-                    mes_planilla,
-                    anio_planilla,
-                    id_rubro,
-                    id_clase
-                ))
-        return redirect('/altas')
-
-    # GET: obtener datos con filtros
-    mes = request.args.get('mes')
-    anio = request.args.get('anio')
-
-    with get_db_connection() as conn:
-        query = """
-            SELECT m.*, r.nombre AS rubro_nombre, c.descripcion AS clase_nombre
-            FROM movimientos_altas m
-            LEFT JOIN rubros r ON m.id_rubro = r.id_rubro
-            LEFT JOIN clases_bienes c ON m.id_clase = c.id_clase
-            WHERE 1=1
-        """
-        params = []
-
-        if mes:
-            query += " AND m.mes_planilla = %s"
-            params.append(mes)
-        if anio:
-            query += " AND m.anio_planilla = %s"
-            params.append(anio)
-
-        query += " ORDER BY m.fecha_alta DESC"
-
-        df = pd.read_sql(query, conn, params=params)
-
-        def parse_column_numeric(col):
-            return col.apply(lambda x: float(str(x).replace(",", ".").replace("$", "").strip()) if x not in [None, "", "None"] else 0.0)
-
-        df['valor_total'] = parse_column_numeric(df['valor_total'])
-        df['valor_unitario'] = parse_column_numeric(df['valor_unitario'])
-
-        rubros = pd.read_sql("SELECT id_rubro, nombre FROM rubros ORDER BY nombre", conn)
-        clases = pd.read_sql("SELECT id_clase, id_rubro, descripcion FROM clases_bienes ORDER BY descripcion", conn)
-
-    return render_template('altas.html',
-                           registros=df.to_dict(orient='records'),
-                           rubros=rubros.to_dict(orient='records'),
-                           clases=clases.to_dict(orient='records'))
+    query = f"?{request.query_string.decode('utf-8')}" if request.query_string else ""
+    return redirect(f"{FRONTEND_PUBLIC_URL}/altas{query}", code=302)
 
 
-
-
-
-
-
-@bp.route('/altas/editar/<int:id>', methods=['GET', 'POST'])
+@bp.route('/altas/editar/<int:id>', methods=['GET'])
 def editar_alta(id):
-    with get_db_connection() as conn:
-        if request.method == 'POST':
-            data = request.form
+    return redirect(f"{FRONTEND_PUBLIC_URL}/altas", code=302)
 
-            def parse_numeric(value):
-                try:
-                    if isinstance(value, str):
-                        value = value.replace("$", "").replace(",", ".").strip()
-                    return float(value)
-                except (ValueError, TypeError):
-                    return 0.0
-
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE movimientos_altas
-                SET fecha_alta = %s,
-                    cantidad = %s,
-                    concepto = %s,
-                    disposicion = %s,
-                    valor_unitario = %s,
-                    valor_total = %s,
-                    causa_alta = %s,
-                    codigo_presup = %s,
-                    identidad = %s,
-                    id_rubro = %s,
-                    id_clase = %s
-                WHERE id = %s
-            """, (
-                data['fecha_alta'],
-                int(data['cantidad']),
-                data['concepto'],
-                data['disposicion'],
-                parse_numeric(data['valor_unitario']),
-                parse_numeric(data['valor_total']),
-                data['causa_alta'],
-                data['codigo_presup'],
-                data['identidad'],
-                int(data['id_rubro']) if data['id_rubro'] else None,
-                int(data['id_clase']) if data['id_clase'] else 0,
-                id
-            ))
-            conn.commit()
-            return redirect('/altas')
-
-        # GET: cargar datos del registro a editar
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM movimientos_altas WHERE id = %s", (id,))
-        registro = cur.fetchone()
-
-        columnas = [desc[0] for desc in cur.description]
-        registro_dict = dict(zip(columnas, registro))
-
-        rubros = pd.read_sql("SELECT id_rubro, nombre FROM rubros ORDER BY nombre", conn)
-        clases = pd.read_sql("SELECT id_clase, id_rubro, descripcion FROM clases_bienes ORDER BY descripcion", conn)
-
-    return render_template('editar_alta.html',
-                           registro=registro_dict,
-                           rubros=rubros.to_dict(orient='records'),
-                           clases=clases.to_dict(orient='records'))
-
-
-
-
-
-
-@bp.route('/altas/eliminar/<int:id>', methods=['POST'])
-def eliminar_alta(id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute('DELETE FROM movimientos_altas WHERE id = %s', (id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    flash('Registro eliminado con éxito.', 'success')
-    return redirect(url_for('altas.altas'))
-
-#@bp.route('/')
-#def index():
-#    return render_template('altas.html')
-
-
-# =============================================================================
-# API NUEVA: PLANILLAS - ALTAS
-# -----------------------------------------------------------------------------
-# Endpoints JSON para usar la carga de altas desde el frontend Next sin romper
-# las pantallas HTML existentes (/altas, /altas/editar, /altas/exportar_pdf).
-# =============================================================================
 
 def _parse_numeric_alta(value):
     try:
@@ -7566,81 +7019,13 @@ def api_actualizar_revision_alta(mes, anio):
 
 @bp.route("/altas/exportar_pdf")
 def exportar_pdf_altas():
-    mes = request.args.get("mes")
-    anio = request.args.get("anio")
+    query = f"?{request.query_string.decode('utf-8')}" if request.query_string else ""
+    return redirect(f"{FRONTEND_PUBLIC_URL}/altas/imprimir{query}", code=302)
 
-    if not mes or not anio:
-        return "Faltan parámetros de mes o año", 400
-
-    conn = get_db_connection()
-    query = """
-        SELECT m.*, r.nombre AS rubro_nombre, c.descripcion AS clase_nombre
-        FROM movimientos_altas m
-        LEFT JOIN rubros r ON m.id_rubro = r.id_rubro
-        LEFT JOIN clases_bienes c ON m.id_clase = c.id_clase
-        WHERE m.mes_planilla = %s AND m.anio_planilla = %s
-        ORDER BY r.nombre, c.descripcion
-    """
-    df = pd.read_sql(query, conn, params=(mes, anio))
-
-    # Extraer rubro_codigo desde codigo_presup
-    df["rubro_codigo"] = df["codigo_presup"].astype(str).str.extract(r'(\d{2})')
-
-    # Generar rubro_general a partir del código
-    mapa_rubro_general = {
-        "43": "MAQUINARIA Y EQUIPO",
-        "44": "INMUEBLES",
-        "45": "VEHÍCULOS",
-        "46": "MOBILIARIO",
-        "47": "EQUIPO DE COMUNICACIONES",
-    }
-    df["rubro_general"] = df["rubro_codigo"].map(mapa_rubro_general).fillna("SIN RUBRO")
-
-    # ✅ Conversión robusta de valor_total y valor_unitario
-    df["valor_total"] = pd.to_numeric(
-        df["valor_total"].astype(str)
-        .str.replace("$", "", regex=False)
-        .str.replace(",", "", regex=False)
-        .str.strip(),
-        errors="coerce"
-    ).fillna(0)
-
-    df["valor_unitario"] = pd.to_numeric(
-        df["valor_unitario"].astype(str)
-        .str.replace("$", "", regex=False)
-        .str.replace(",", "", regex=False)
-        .str.strip(),
-        errors="coerce"
-    ).fillna(0)
-
-    # ✅ Cálculo total general
-    total_general = df["valor_total"].sum()
-
-    # Debug en consola
-    print(df[["valor_total"]].head(10))
-    print("TOTAL GENERAL CALCULADO:", total_general)
-
-    fecha_presentacion = datetime.now().strftime("%d/%m/%Y")
-
-    return render_template("formato_oficial_altas.html",
-                           registros=df.to_dict(orient="records"),
-                           mes=mes,
-                           anio=anio,
-                           fecha_presentacion=fecha_presentacion,
-                           total_general=total_general)
-
-
-
-
-
-
-#DASHBOARD-----------------------------------------------------------------------------------------------------------------
-# ---------- DASHBOARD -------------------------------------------------------------------------------------------------------------
-from sqlalchemy import text
 
 @app.route('/dashboard')
 def dashboard():
-    return render_template('dashboard.html')
+    return redirect(f"{FRONTEND_PUBLIC_URL}/Home", code=302)
 
 @app.route('/api/dashboard', methods=['GET'])
 def dashboard_data():
@@ -7838,7 +7223,7 @@ def dashboard_data():
 #LISTADO DE CONTROL-------------------------------------------------------------------------------------
 @app.route('/control')
 def control():
-    return render_template('control.html')
+    return redirect(f"{FRONTEND_PUBLIC_URL}/Control", code=302)
 
 
 
@@ -7848,382 +7233,11 @@ def control():
 # La clave de sesion se configura una sola vez desde SECRET_KEY.
 app.register_blueprint(bp)
 # 🔢 Filtro para convertir strings tipo "$ 12,345.67" a float
-def to_float(value):
-    try:
-        if isinstance(value, str):
-            value = value.replace('$', '').replace(',', '').strip()
-        return float(value)
-    except:
-        return 0.0
-
-# 📎 Registrar el filtro en la app Flask (no en el Blueprint)
-app.add_template_filter(to_float, 'to_float')
-
-
-
-
 @app.route('/mobiliario_filtros')
 def mobiliario_filtros():
-    anexos = Anexo.query.order_by(Anexo.nombre).all()
-    rubros = Rubro.query.order_by(Rubro.nombre).all()
-    return render_template("mobiliario_filtros.html", anexos=anexos, rubros=rubros)
+    return redirect(f"{FRONTEND_PUBLIC_URL}/ListadosGenerales", code=302)
 
 
-#SISTEMA DE PERSONAL ----------------------------------------------------------------------------------------
-# =======================================================
-# 🧭 API REST para la gestión de agentes
-# =======================================================
-
-# 🟢 1️⃣ CREAR UN NUEVO AGENTE -------------------------------------------------
-@app.route('/api/agentes', methods=['POST'])
-@personal_required_api
-def crear_agente():
-    """
-    Crea un nuevo agente en la base de datos.
-    Permite subir una imagen (campo 'foto') que se guarda en Cloudinary.
-    Requiere: legajo, dni_cuil, apellido, nombre.
-    Opcional: id_anexo, id_subdependencia, categoria, tipo, cargo, telefono, email, foto_url.
-    """
-    try:
-        # Si viene JSON (sin archivo)
-        if request.is_json:
-            data = request.get_json() or {}
-            foto_url = data.get("foto_url")
-
-        # Si viene como formulario multipart (con archivo)
-        else:
-            data = request.form.to_dict()
-            foto_url = None
-
-            # 📸 Subir imagen si está presente
-            if "foto" in request.files:
-                file = request.files["foto"]
-                if file and file.filename != "":
-                    # Guardar temporalmente el archivo
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp:
-                        file.save(temp.name)
-                        # Subir a Cloudinary (carpeta agentes)
-                        result = cloudinary.uploader.upload(temp.name, folder="agentes")
-                        foto_url = result.get("secure_url")
-                        os.remove(temp.name)
-
-        # Validar campos obligatorios
-        campos_obligatorios = ['legajo', 'dni_cuil', 'apellido', 'nombre']
-        for campo in campos_obligatorios:
-            if not data.get(campo):
-                return jsonify({"error": f"Falta el campo obligatorio: {campo}"}), 400
-
-        # Crear el nuevo objeto Agente
-        nuevo = Agente(
-            legajo=data['legajo'],
-            dni_cuil=data['dni_cuil'],
-            apellido=data['apellido'],
-            nombre=data['nombre'],
-            id_anexo=data.get('id_anexo'),
-            id_subdependencia=data.get('id_subdependencia'),
-            categoria=data.get('categoria'),
-            tipo=data.get('tipo'),
-            cargo=data.get('cargo'),
-            telefono=data.get('telefono'),
-            email=data.get('email'),
-            foto_url=foto_url  # ✅ se carga automáticamente desde Cloudinary
-        )
-
-        db.session.add(nuevo)
-        db.session.commit()
-
-        return jsonify({
-            "mensaje": "Agente registrado correctamente",
-            "agente": nuevo.to_dict()
-        }), 201
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-
-# 🟠 2️⃣ LISTAR TODOS LOS AGENTES ----------------------------------------------
-@app.route('/api/agentes', methods=['GET'])
-def listar_agentes():
-    """
-    Devuelve un listado completo de todos los agentes,
-    con sus anexos y subdependencias asociados.
-    """
-    try:
-        agentes = Agente.query.order_by(Agente.apellido, Agente.nombre).all()
-        return jsonify([a.to_dict() for a in agentes]), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# 🔵 3️⃣ OBTENER UN AGENTE POR ID ----------------------------------------------
-@app.route('/api/agentes/<int:id>', methods=['GET'])
-def obtener_agente(id):
-    """Obtiene la información detallada de un agente por su ID."""
-    agente = Agente.query.get(id)
-    if not agente:
-        return jsonify({"error": "Agente no encontrado"}), 404
-    return jsonify(agente.to_dict()), 200
-
-
-# 🟣 4️⃣ EDITAR UN AGENTE EXISTENTE --------------------------------------------
-@app.route('/api/agentes/<int:id>', methods=['PUT', 'PATCH'])
-@personal_required_api
-def editar_agente(id):
-    """
-    Actualiza los datos de un agente existente.
-    Permite modificar cualquiera de los campos opcionales.
-    """
-    try:
-        agente = Agente.query.get(id)
-        if not agente:
-            return jsonify({"error": "Agente no encontrado"}), 404
-
-        data = request.get_json() or {}
-
-        # Actualizar solo los campos presentes en el request
-        for campo in [
-            "legajo", "dni_cuil", "apellido", "nombre",
-            "id_anexo", "id_subdependencia",
-            "categoria", "tipo", "cargo", "telefono", "email", "foto_url"
-        ]:
-            if campo in data:
-                setattr(agente, campo, data[campo])
-
-        db.session.commit()
-        return jsonify({
-            "mensaje": "Agente actualizado correctamente",
-            "agente": agente.to_dict()
-        }), 200
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-# 🔴 5️⃣ ELIMINAR UN AGENTE ----------------------------------------------------
-@app.route('/api/agentes/<int:id>', methods=['DELETE'])
-@personal_required_api
-def eliminar_agente(id):
-    """
-    Elimina un agente por su ID.
-    """
-    try:
-        agente = Agente.query.get(id)
-        if not agente:
-            return jsonify({"error": "Agente no encontrado"}), 404
-
-        db.session.delete(agente)
-        db.session.commit()
-        return jsonify({"mensaje": "Agente eliminado correctamente"}), 200
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
-
-
-# 🟡 6️⃣ LISTAR AGENTES POR ANEXO ----------------------------------------------
-@app.route('/api/reportes/agentes_por_anexo', methods=['GET'])
-def reportes_agentes_por_anexo():
-    """
-    Devuelve un resumen de cantidad de agentes por anexo para gráficos.
-    """
-    try:
-        rows = db.session.query(
-            Anexo.nombre,
-            db.func.count(Agente.id)
-        ).outerjoin(Agente, Agente.id_anexo == Anexo.id)\
-         .group_by(Anexo.nombre)\
-         .order_by(Anexo.nombre.asc())\
-         .all()
-
-        data = {nombre: cantidad for nombre, cantidad in rows}
-
-        return jsonify(data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
-# 🟤 7️⃣ LISTAR AGENTES POR SUBDEPENDENCIA -------------------------------------
-@app.route('/api/agentes/subdependencia/<int:sub_id>', methods=['GET'])
-def agentes_por_subdependencia(sub_id):
-    """
-    Lista todos los agentes que pertenecen a una subdependencia específica.
-    """
-    try:
-        agentes = Agente.query.filter_by(id_subdependencia=sub_id)\
-                              .order_by(Agente.apellido).all()
-        return jsonify([a.to_dict() for a in agentes]), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/agentes')
-def agentes():
-    return render_template('agentes.html')
-
-
-#API 1 — Total de empleados-------------------------
-@app.route('/api/reportes/total_agentes', methods=['GET'])
-def total_agentes():
-    try:
-        total = Agente.query.count()
-        return jsonify({"total": total}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-        
-#API 2 — Empleados por tipo
-@app.route('/api/reportes/agentes_por_tipo', methods=['GET'])
-def agentes_por_tipo():
-    try:
-        rows = db.session.query(
-            Agente.tipo,
-            db.func.count(Agente.id)
-        ).group_by(Agente.tipo).all()
-
-        data = {tipo or "Sin tipo": cantidad for tipo, cantidad in rows}
-
-        return jsonify(data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-#API 3 — Empleados por anexo------------
-@app.route('/api/reportes/agentes_por_anexo', methods=['GET'])
-def agentes_por_anexo():
-    try:
-        rows = db.session.query(
-            Anexo.nombre,
-            db.func.count(Agente.id)
-        ).outerjoin(Agente, Agente.id_anexo == Anexo.id)\
-         .group_by(Anexo.nombre)\
-         .order_by(Anexo.nombre.asc())\
-         .all()
-
-        data = {nombre: cantidad for nombre, cantidad in rows}
-
-        return jsonify(data), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-#Login personal ------------------------------
-@app.post("/api/login_personal")
-def api_login_personal():
-    data = request.get_json() or {}
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-
-    if not username or not password:
-        return jsonify({"error": "missing_credentials"}), 400
-
-    allowed, retry_after = _login_rate_allowed(username)
-    if not allowed:
-        return jsonify({
-            "error": "too_many_attempts",
-            "retry_after": retry_after,
-        }), 429
-
-    # --------------------------------------------------
-    # 1) Buscar usuario en texto plano (SIN HASH)
-    # --------------------------------------------------
-    try:
-        conn, cur = get_conn_dict()
-        cur.execute("""
-            SELECT id, username, password, role, activo
-            FROM usuariospersonal
-            WHERE username = %s
-            LIMIT 1
-        """, (username,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print("DB ERROR /api/login_personal:", e)
-        return jsonify({"error": "db_error"}), 500
-
-    if not row:
-        _record_login_failure(username)
-        return jsonify({"error": "invalid_credentials"}), 401
-
-    user = dict(row)
-
-    if not user.get("activo", True):
-        _record_login_failure(username)
-        return jsonify({"error": "user_inactive"}), 403
-
-    # --------------------------------------------------
-    # 2) Validar contrasena y migrar a hash si estaba en texto plano
-    # --------------------------------------------------
-    stored_password = user.get("password", "")
-
-    if _password_esta_hasheada(stored_password):
-        if not _password_coincide(stored_password, password):
-            _record_login_failure(username)
-            return jsonify({"error": "invalid_credentials"}), 401
-    else:
-        if not _password_coincide(stored_password, password):
-            _record_login_failure(username)
-            return jsonify({"error": "invalid_credentials"}), 401
-        try:
-            new_hash = generate_password_hash(password)
-            conn, cur = get_conn_dict()
-            cur.execute(
-                "UPDATE usuariospersonal SET password = %s WHERE id = %s",
-                (new_hash, user["id"])
-            )
-            conn.commit()
-            cur.close()
-            conn.close()
-        except Exception as e:
-            print("DB ERROR migrando password personal:", e)
-
-    # --------------------------------------------------
-    # 3) Crear sesión
-    # --------------------------------------------------
-    _clear_auth_session()
-    session.permanent = True
-    session["username_personal"] = user["username"]
-    session["role_personal"] = user.get("role", "personal")
-    session["csrf_token"] = secrets.token_urlsafe(32)
-    _touch_session_activity()
-    _clear_login_failures(username)
-
-    return jsonify({
-        "username": user["username"],
-        "role": user.get("role", "personal")
-    }), 200
-
-
-
-
-@app.get("/api/me_personal")
-def api_me_personal():
-    if "username_personal" not in session:
-        return jsonify({"error": "not_logged_in"}), 401
-
-    return jsonify({
-        "username": session.get("username_personal"),
-        "role": session.get("role_personal")
-    }), 200
-
-#cierre de sesion -----------
-@app.post("/api/logout_personal")
-def api_logout_personal():
-    _clear_auth_session()
-    return jsonify({"ok": True}), 200
-
-#Decorador para proteger rutas del personal
-def login_required_personal(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if "username_personal" not in session:
-            return jsonify({"error": "auth_required"}), 401
-        return f(*args, **kwargs)
-    return wrapper
-
-
-# ▶️ Ejecutar con python app.py
 from assistant_api import assistant_api, register_assistant
 register_assistant(db, admin_required_api, _ensure_compras_bienes_tables, _ensure_matafuegos_tables)
 app.register_blueprint(assistant_api)
